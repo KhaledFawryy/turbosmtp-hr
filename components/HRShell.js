@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { createClient } from "../lib/supabase/client";
 import { useRouter } from "next/navigation";
 
@@ -230,7 +230,7 @@ export default function HRShell({ currentUser, allProfiles: initProfiles, balanc
             {isAdmin ? `Welcome back, ${currentUser?.name?.split(" ")[0]} 👋` : `Hello, ${currentUser?.name?.split(" ")[0]} 👋`}
           </div>
           <div style={{ fontSize:14, color:T.textMid }}>
-            {isAdmin ? "turboSMTP · First Line Support Management" : `${currentUser?.role} · ${currentUser?.shift}`}
+            {isAdmin ? "turboSMTP · Support Team Leader" : `${currentUser?.role} · ${currentUser?.shift}`}
           </div>
         </div>
 
@@ -347,7 +347,7 @@ export default function HRShell({ currentUser, allProfiles: initProfiles, balanc
       <div>
         <div style={{marginBottom:24}}>
           <div style={{fontSize:22,fontWeight:800,color:T.text}}>Support Agents</div>
-          <div style={{fontSize:13,color:T.textDim,marginTop:4}}>turboSMTP · First Line Support · 9 agents</div>
+          <div style={{fontSize:13,color:T.textDim,marginTop:4}}>turboSMTP · First Line Support — 9 Agents</div>
         </div>
         <div style={g3}>
           {agentProfiles.map(m=>{
@@ -452,13 +452,42 @@ export default function HRShell({ currentUser, allProfiles: initProfiles, balanc
     function parseCSV(text) {
       const lines = text.trim().split("\n").filter(l=>l.trim());
       if (lines.length < 2) return [];
-      const headers = lines[0].split(",").map(h=>h.trim().toLowerCase().replace(/"/g,""));
+      // Support both comma and tab separated
+      const sep = lines[0].includes("\t") ? "\t" : ",";
+      const headers = lines[0].split(sep).map(h=>h.trim().toLowerCase().replace(/"/g,"").replace(/\r/g,""));
       return lines.slice(1).map(line=>{
-        const cols = line.split(",").map(c=>c.trim().replace(/"/g,""));
+        const cols = line.split(sep).map(c=>c.trim().replace(/"/g,"").replace(/\r/g,""));
         const row={};
         headers.forEach((h,i)=>{ row[h]=cols[i]||""; });
         return row;
       }).filter(r=>r.date&&r.name);
+    }
+
+    async function parseExcel(file) {
+      return new Promise((resolve, reject) => {
+        const script = document.createElement("script");
+        script.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+        script.onload = () => {
+          const reader = new FileReader();
+          reader.onload = (e) => {
+            try {
+              const wb = XLSX.read(e.target.result, {type:"array"});
+              const ws = wb.Sheets[wb.SheetNames[0]];
+              const json = XLSX.utils.sheet_to_json(ws, {raw:false, defval:""});
+              // Normalize headers to lowercase
+              const rows = json.map(r => {
+                const norm = {};
+                Object.keys(r).forEach(k => { norm[k.toLowerCase().trim()] = String(r[k]).trim(); });
+                return norm;
+              }).filter(r => r.date && r.name);
+              resolve(rows);
+            } catch(err) { reject(err); }
+          };
+          reader.readAsArrayBuffer(file);
+        };
+        script.onerror = () => reject(new Error("Could not load Excel parser"));
+        document.head.appendChild(script);
+      });
     }
 
     function matchProfile(name) {
@@ -489,9 +518,15 @@ export default function HRShell({ currentUser, allProfiles: initProfiles, balanc
       if(!file) return;
       setUploadError(""); setUploadStatus("parsing");
       try {
-        const text=await file.text();
-        const rows=parseCSV(text);
-        if(rows.length===0){ setUploadError("No valid rows. CSV must have columns: date, name, shift"); setUploadStatus(null); return; }
+        let rows = [];
+        const isExcel = file.name.endsWith(".xlsx") || file.name.endsWith(".xls");
+        if (isExcel) {
+          rows = await parseExcel(file);
+        } else {
+          const text = await file.text();
+          rows = parseCSV(text);
+        }
+        if(rows.length===0){ setUploadError("No valid rows found. Make sure your file has columns: date, name, shift"); setUploadStatus(null); return; }
         setUploadedRows(rows);
         setConflicts(detectConflicts(rows));
         setUploadStatus("preview");
@@ -568,19 +603,19 @@ export default function HRShell({ currentUser, allProfiles: initProfiles, balanc
                   <label style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:12,padding:"32px 20px",border:`2px dashed ${T.borderHi}`,borderRadius:14,cursor:"pointer",background:T.bgDeep}}>
                     <span style={{fontSize:40}}>{"📂"}</span>
                     <div style={{textAlign:"center"}}>
-                      <div style={{fontSize:14,fontWeight:800,color:T.text}}>Drop CSV here or click to browse</div>
-                      <div style={{fontSize:12,color:T.textDim,marginTop:4}}>Columns needed: <code style={{color:T.accent}}>date</code>, <code style={{color:T.accent}}>name</code>, <code style={{color:T.accent}}>shift</code></div>
+                      <div style={{fontSize:14,fontWeight:800,color:T.text}}>Drop Excel or CSV here · click to browse</div>
+                      <div style={{fontSize:12,color:T.textDim,marginTop:4}}>Supports Excel (.xlsx) and CSV — columns: <code style={{color:T.accent}}>date</code>, <code style={{color:T.accent}}>name</code>, <code style={{color:T.accent}}>shift</code></div>
                     </div>
-                    <input type="file" accept=".csv,.txt" style={{display:"none"}} onChange={handleFileUpload}/>
+                    <input type="file" accept=".csv,.xlsx,.xls,.txt" style={{display:"none"}} onChange={handleFileUpload}/>
                   </label>
                   {uploadError&&<div style={{background:"rgba(248,113,113,0.1)",border:"1px solid rgba(248,113,113,0.3)",borderRadius:8,padding:"10px 14px",fontSize:12,color:"#f87171"}}>{"⚠ "}{uploadError}</div>}
                   <div style={{background:T.bgDeep,borderRadius:10,padding:"14px 16px"}}>
                     <div style={{fontSize:11,fontWeight:800,color:T.textMid,marginBottom:8,textTransform:"uppercase",letterSpacing:"0.08em"}}>CSV Format Example</div>
                     <div style={{fontSize:11,color:T.accent,lineHeight:2,fontFamily:"monospace"}}>
                       date,name,shift<br/>
-                      2025-05-05,Abdullah El Quady,Morning<br/>
-                      2025-05-05,Merna Badr,Evening<br/>
-                      2025-05-06,Mai Seif,Morning
+                      2025-05-05,Abdullah El Quady,Morning (9-5)<br/>
+                      2025-05-05,Merna Badr,Night (5-1)<br/>
+                      2025-05-06,Mai Seif,Morning (9-5)
                     </div>
                   </div>
                 </div>
@@ -672,7 +707,7 @@ export default function HRShell({ currentUser, allProfiles: initProfiles, balanc
               </div>
               <div style={card}>
                 <div style={cardT}>Shift Groups</div>
-                {["Morning (8-4)","Evening (2-10)","Night (10-6)"].map(sh=>(
+                {["Morning (9-5)","Night (5-1)","Overnight (1-9)"].map(sh=>(
                   <div key={sh} style={{marginBottom:14,padding:"12px 14px",background:T.bgDeep,borderRadius:10}}>
                     <div style={{fontSize:12,fontWeight:800,color:T.textMid,marginBottom:8}}>{sh}</div>
                     <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>{agentProfiles.filter(m=>m.shift===sh).map(m=><Av key={m.id} m={m} size={32}/>)}</div>
@@ -937,7 +972,7 @@ export default function HRShell({ currentUser, allProfiles: initProfiles, balanc
             <Av m={currentUser} size={32}/>
             <div>
               <div style={{ fontSize:12, fontWeight:700, color:T.text }}>{currentUser?.name?.split(" ")[0]}</div>
-              <div style={{ fontSize:10, color:T.textDim }}>{isAdmin?"Admin":"Agent"}</div>
+              <div style={{ fontSize:10, color:T.textDim }}>{isAdmin?"Team Leader":"Agent"}</div>
             </div>
           </div>
 
@@ -960,7 +995,7 @@ export default function HRShell({ currentUser, allProfiles: initProfiles, balanc
               <Av m={currentUser} size={38}/>
               <div>
                 <div style={{ fontSize:13, fontWeight:700, color:T.text }}>{currentUser?.name}</div>
-                <div style={{ fontSize:11, color:T.textDim, marginTop:2 }}>{isAdmin?"Admin · Manager":currentUser?.role}</div>
+                <div style={{ fontSize:11, color:T.textDim, marginTop:2 }}>{isAdmin?"Team Leader":currentUser?.role}</div>
               </div>
             </div>
           </div>
